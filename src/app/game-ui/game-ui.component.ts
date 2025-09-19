@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, HostListener, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { MongoService, Move } from '../services/mongo.service';
 
 // --- TYPE DEFINITIONS ---
 type Tile = { letter: string; value: number };
@@ -59,6 +60,7 @@ export class GameUiComponent {
   tilesToExchange = signal<number[]>([]);
   draggedTileIndex = signal<number | null>(null);
 
+  constructor(private mongoService: MongoService) { }
 
   // --- COMPUTED SIGNALS ---
   currentPlayer = computed(() => this.gameState().players.find(p => p.id === this.gameState().currentPlayerId));
@@ -206,13 +208,48 @@ export class GameUiComponent {
       this.passTurn();
       return;
     }
-    // In a real app, send this.currentPlacements() to the server
-    console.log('Submitting move:', this.currentPlacements());
-    this.showWarning('Move submitted for server validation!');
-    // On server response, you would update gameState and clear placements
-    // For now, let's just clear them for the next turn mock
-    this.currentPlacements.set([]);
-    this.selectedSquare.set(null);
+
+    if (!this.isMyTurn()) {
+        this.showWarning("It's not your turn!");
+        return;
+    }
+
+    const move: Move = {
+      gameId: 'mockGame123',
+      playerId: `player${this.LOCAL_PLAYER_ID}`,
+      placements: this.currentPlacements(),
+      score: 0, // Server will calculate
+      timestamp: new Date(),
+    };
+
+    this.mongoService.submitMove(move).subscribe({
+      next: (response) => {
+        this.showWarning('Move submitted successfully!');
+        console.log('Server response:', response);
+
+        // Update local state on success
+        this.gameState.update(gs => {
+            const newBoard = gs.board.map(row => row.map(square => ({...square})));
+            this.currentPlacements().forEach(p => {
+                newBoard[p.y][p.x].tile = p.tile;
+                newBoard[p.y][p.x].isPlaced = false;
+            });
+            const nextPlayerIndex = (gs.players.findIndex(p => p.id === gs.currentPlayerId) + 1) % gs.players.length;
+            return {
+                ...gs,
+                board: newBoard,
+                currentPlayerId: gs.players[nextPlayerIndex].id,
+            };
+        });
+
+        this.currentPlacements.set([]);
+        this.selectedSquare.set(null);
+      },
+      error: (error) => {
+        console.error('Failed to submit move', error);
+        this.showWarning(`Error: ${error.error?.message || 'Could not submit move.'}`);
+      }
+    });
   }
 
   passTurn() {
