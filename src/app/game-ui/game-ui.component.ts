@@ -44,9 +44,16 @@ export class GameUiComponent {
   private readonly BOARD_SIZE = 15;
   private readonly LOCAL_PLAYER_ID = 1;
 
+  // --- TILE BAG & DICTIONARY ---
+  // Central tile bag built from distribution and shuffled
+  private tileBag: Tile[] = this.buildTileBag();
+  // Simple dictionary placeholder; replace with real list for production
+  private dictionary: Set<string> = this.loadDefaultDictionary();
+
   // --- SIGNALS FOR STATE MANAGEMENT ---
   gameState = signal<GameState>(this.createInitialGameState());
-  localPlayerRack = signal<Tile[]>(this.gameState().players.find(p => p.id === this.LOCAL_PLAYER_ID)!.rack);
+  // Track and display the rack of the current player (hot-seat mode)
+  localPlayerRack = signal<Tile[]>(this.gameState().players.find(p => p.id === this.gameState().currentPlayerId)!.rack);
 
   // UI Interaction State
   selectedSquare = signal<{ x: number; y: number } | null>(null);
@@ -64,6 +71,7 @@ export class GameUiComponent {
   playerTimes = signal<Record<number, number>>({});
   private turnTimer: any = null;
   private lastTickAt: number | null = null;
+
 
   constructor() {
     // Initialize timers for all players to 0 and start the current player's timer
@@ -136,10 +144,14 @@ export class GameUiComponent {
       return;
     }
 
+    const nextPlayerId = players[nextIndex].id;
+    const nextRack = players[nextIndex].rack;
     this.gameState.update(s => ({
       ...s,
-      currentPlayerId: players[nextIndex].id,
+      currentPlayerId: nextPlayerId,
     }));
+    // Sync the visible rack to the next player's rack
+    this.localPlayerRack.set([...nextRack]);
     this.currentPlacements.set([]);
     this.selectedSquare.set(null);
     this.startTimerForCurrentPlayer();
@@ -283,6 +295,156 @@ export class GameUiComponent {
     return { x: nextX, y: nextY };
   }
 
+  // --- MOVE VALIDATION ---
+  private validateCurrentMove(): { ok: boolean; error?: string } {
+    const placements = this.currentPlacements();
+    if (placements.length === 0) return { ok: false, error: 'No tiles placed.' };
+
+    // Ensure no duplicate coordinate in placements
+    const coordSet = new Set(placements.map(p => `${p.x},${p.y}`));
+    if (coordSet.size !== placements.length) return { ok: false, error: 'Duplicate tile placement.' };
+
+    // Must be single row or single column
+    const xs = placements.map(p => p.x);
+    const ys = placements.map(p => p.y);
+    const sameRow = ys.every(y => y === ys[0]);
+    const sameCol = xs.every(x => x === xs[0]);
+    if (!sameRow && !sameCol) return { ok: false, error: 'Tiles must be in a single row or column.' };
+
+    const board = this.gameState().board;
+    const isFirst = this.isFirstMove();
+
+    // First move must cover center
+    if (isFirst) {
+      const coversCenter = placements.some(p => p.x === 7 && p.y === 7);
+      if (!coversCenter) return { ok: false, error: 'First move must cover the center star.' };
+    } else {
+      // Subsequent moves must connect to existing tiles
+      const connects = placements.some(p => this.hasOrthogonalNeighborExisting(p.x, p.y));
+      if (!connects) return { ok: false, error: 'Move must connect to existing tiles.' };
+    }
+
+    // Contiguity along the move direction including existing tiles
+    if (sameRow) {
+      const y = ys[0];
+      const minX = Math.min(...xs);
+      const maxX = Math.max(...xs);
+      for (let x = minX; x <= maxX; x++) {
+        const hasTile = this.getTileFromBoardOrPlacements(x, y) !== null;
+        if (!hasTile) return { ok: false, error: 'Placed tiles must be contiguous (no gaps).' };
+      }
+    } else {
+      const x = xs[0];
+      const minY = Math.min(...ys);
+      const maxY = Math.max(...ys);
+      for (let y = minY; y <= maxY; y++) {
+        const hasTile = this.getTileFromBoardOrPlacements(x, y) !== null;
+        if (!hasTile) return { ok: false, error: 'Placed tiles must be contiguous (no gaps).' };
+      }
+    }
+
+    // Build words and validate against dictionary
+    const words = this.buildWordsForMove();
+    if (words.main.length < 2 && !isFirst) {
+      return { ok: false, error: 'Main word must be at least 2 letters.' };
+    }
+
+    const allWords = [words.main, ...words.cross.filter(w => w.length >= 2)];
+    for (const w of allWords) {
+      if (!this.dictionary.has(w.toUpperCase())) {
+        return { ok: false, error: `Invalid word: ${w}` };
+      }
+    }
+
+    return { ok: true };
+  }
+
+  private isFirstMove(): boolean {
+    const board = this.gameState().board;
+    for (let y = 0; y < this.BOARD_SIZE; y++) {
+      for (let x = 0; x < this.BOARD_SIZE; x++) {
+        if (board[y][x].tile) return false;
+      }
+    }
+    return true;
+  }
+
+  private hasOrthogonalNeighborExisting(x: number, y: number): boolean {
+    const dirs = [ [1,0], [-1,0], [0,1], [0,-1] ] as const;
+    const board = this.gameState().board;
+    for (const [dx,dy] of dirs) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= this.BOARD_SIZE || ny >= this.BOARD_SIZE) continue;
+      const existing = board[ny][nx].tile;
+      if (existing) return true;
+    }
+    return false;
+  }
+
+  private getTileFromBoardOrPlacements(x: number, y: number): Tile | null {
+    // Check placements first
+    const p = this.currentPlacements().find(pl => pl.x === x && pl.y === y);
+    if (p) return p.tile;
+    const board = this.gameState().board;
+    return board[y][x].tile;
+  }
+
+  private buildWordsForMove(): { main: string; cross: string[] } {
+    const placements = this.currentPlacements();
+    const xs = placements.map(p => p.x);
+    const ys = placements.map(p => p.y);
+    const sameRow = ys.every(y => y === ys[0]);
+
+    const overlayTile = (x: number, y: number): Tile | null => this.getTileFromBoardOrPlacements(x, y);
+
+    const collectLine = (x: number, y: number, dx: number, dy: number): string => {
+      // Move to start
+      let cx = x, cy = y;
+      while (cx - dx >= 0 && cy - dy >= 0 && cx - dx < this.BOARD_SIZE && cy - dy < this.BOARD_SIZE && overlayTile(cx - dx, cy - dy)) {
+        cx -= dx; cy -= dy;
+      }
+      // Collect letters
+      let word = '';
+      while (cx >= 0 && cy >= 0 && cx < this.BOARD_SIZE && cy < this.BOARD_SIZE && overlayTile(cx, cy)) {
+        word += overlayTile(cx, cy)!.letter;
+        cx += dx; cy += dy;
+      }
+      return word;
+    };
+
+    // Special handling for a single-tile placement: infer direction from surrounding tiles
+    if (placements.length === 1) {
+      const p = placements[0];
+      const horiz = collectLine(p.x, p.y, 1, 0);
+      const vert = collectLine(p.x, p.y, 0, 1);
+      if (vert.length >= horiz.length) {
+        const cross: string[] = [];
+        if (horiz.length >= 2) cross.push(horiz);
+        return { main: vert, cross };
+      } else {
+        const cross: string[] = [];
+        if (vert.length >= 2) cross.push(vert);
+        return { main: horiz, cross };
+      }
+    }
+
+    // Main word for multi-tile placement follows the placement line
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const anchorX = sameRow ? minX : xs[0];
+    const anchorY = sameRow ? ys[0] : minY;
+    const main = sameRow ? collectLine(anchorX, anchorY, 1, 0) : collectLine(anchorX, anchorY, 0, 1);
+
+    // Cross words at each placed tile
+    const cross: string[] = [];
+    for (const p of placements) {
+      const w = sameRow ? collectLine(p.x, p.y, 0, 1) : collectLine(p.x, p.y, 1, 0);
+      if (w.length >= 2) cross.push(w);
+    }
+
+    return { main, cross };
+  }
+
 
   // --- USER ACTIONS ---
   handleBoardClick(y: number, x: number) {
@@ -304,14 +466,56 @@ export class GameUiComponent {
       this.passTurn();
       return;
     }
-    // In a real app, send this.currentPlacements() to the server
-    console.log('Submitting move:', this.currentPlacements());
-    this.showWarning('Move submitted for server validation!');
-    // On server response, you would update gameState and clear placements
-    // For now, let's just clear them for the next turn mock
+
+    const validation = this.validateCurrentMove();
+    if (!validation.ok) {
+      this.showWarning(validation.error || 'Invalid move.');
+      return;
+    }
+
+    // Commit placements to the board
+    const placements = this.currentPlacements();
+    const board = this.gameState().board.map(row => row.map(sq => ({ ...sq })));
+    for (const p of placements) {
+      board[p.y][p.x] = { ...board[p.y][p.x], tile: { ...p.tile }, isPlaced: false };
+    }
+
+    // Remove used tiles from rack and refill
+    const currentId = this.gameState().currentPlayerId;
+    const playerIndex = this.gameState().players.findIndex(p => p.id === currentId);
+    const playersCopy = this.gameState().players.map(p => ({ ...p, rack: [...p.rack] }));
+    const rack = playersCopy[playerIndex].rack;
+
+    for (const p of placements) {
+      // For blanks, letter in rack is ' '
+      const targetLetter = p.isBlank ? ' ' : p.tile.letter;
+      const idx = rack.findIndex(t => t.letter === targetLetter);
+      if (idx !== -1) rack.splice(idx, 1);
+    }
+
+    // Sync visible rack with current player's rack after removing used tiles
+    const localRackAfterUse = [...rack];
+
+    // Draw tiles to refill to 7
+    const toDraw = Math.max(0, 7 - rack.length);
+    const drawn = this.drawTiles(toDraw);
+    rack.push(...drawn);
+    playersCopy[playerIndex].rack = rack;
+
+    // Update the visible rack for the current (active) player
+    this.localPlayerRack.set([...playersCopy[playerIndex].rack]);
+
+    // Update state
+    this.gameState.update(s => ({
+      ...s,
+      board,
+      players: playersCopy,
+      tileBagCount: this.tileBag.length,
+    }));
+
+    // Clear placement state and rotate
     this.currentPlacements.set([]);
     this.selectedSquare.set(null);
-    // Rotate to next player's turn
     this.rotateTurn();
   }
 
@@ -453,17 +657,67 @@ export class GameUiComponent {
     }
   }
 
+  // --- TILE BAG HELPERS ---
+  private buildTileBag(): Tile[] {
+    const bag: Tile[] = [];
+    for (const [letter, info] of Object.entries(this.TILE_DISTRIBUTION)) {
+      for (let i = 0; i < info.count; i++) {
+        bag.push({ letter, value: info.value });
+      }
+    }
+    return this.shuffle(bag);
+  }
+
+  private shuffle<T>(arr: T[]): T[] {
+    const a = [...arr];
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  private drawTiles(count: number): Tile[] {
+    const drawn: Tile[] = [];
+    for (let i = 0; i < count && this.tileBag.length > 0; i++) {
+      const tile = this.tileBag.pop();
+      if (tile) drawn.push(tile);
+    }
+    // update tile bag count in state if already created
+    if (this.gameState) {
+      this.gameState.update(s => ({ ...s, tileBagCount: this.tileBag.length }));
+    }
+    return drawn;
+  }
+
+  // Dictionary loader (placeholder). Replace with file-based loader if provided.
+  private loadDefaultDictionary(): Set<string> {
+    const words = [
+      'A', 'I', 'AN', 'IN', 'ON', 'AT', 'TO', 'DO', 'GO', 'ME', 'HE', 'RE',
+      'CAT', 'DOG', 'TREE', 'HOME', 'HELLO', 'WORLD', 'TEST', 'QUIZ', 'AX', 'JO', 'QI'
+    ];
+    return new Set(words.map(w => w.toUpperCase()));
+  }
+
   // --- INITIALIZATION ---
   private createInitialGameState(): GameState {
-    // For demonstration, we create a mock game state
+    const board = this.createEmptyBoard();
+    const players: Player[] = [
+      { id: 1, name: 'Player 1', score: 0, rack: [] },
+      { id: 2, name: 'Player 2', score: 0, rack: [] },
+    ];
+
+    // Deal 7 tiles to each player from the central bag
+    players.forEach(p => p.rack = this.drawTiles(7));
+
+    // Randomly choose starting player
+    const startingPlayer = players[Math.floor(Math.random() * players.length)];
+
     return {
-      board: this.createEmptyBoard(),
-      players: [
-        { id: 1, name: 'Player 1', score: 0, rack: this.generateRandomRack(7) },
-        { id: 2, name: 'Player 2', score: 0, rack: this.generateRandomRack(7) },
-      ],
-      currentPlayerId: 1, // Player 1 starts
-      tileBagCount: 100 - 14, // 100 total tiles
+      board,
+      players,
+      currentPlayerId: startingPlayer.id,
+      tileBagCount: this.tileBag.length,
       status: 'active',
     };
   }
