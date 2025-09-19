@@ -69,7 +69,8 @@ export class GameUiComponent implements OnDestroy {
     // Initialize timers for all players to 0 and start the current player's timer
     const initial: Record<number, number> = {};
     for (const p of this.gameState().players) {
-      initial[p.id] = 0;
+      // Initialize each player with 10 minutes (600,000 ms)
+      initial[p.id] = 600000;
     }
     this.playerTimes.set(initial);
 
