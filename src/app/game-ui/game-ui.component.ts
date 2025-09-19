@@ -69,7 +69,8 @@ export class GameUiComponent {
     // Initialize timers for all players to 0 and start the current player's timer
     const initial: Record<number, number> = {};
     for (const p of this.gameState().players) {
-      initial[p.id] = 0;
+      // Initialize each player with 10 minutes (600,000 ms)
+      initial[p.id] = 600000;
     }
     this.playerTimes.set(initial);
 
@@ -87,10 +88,22 @@ export class GameUiComponent {
       const delta = this.lastTickAt ? now - this.lastTickAt : 1000;
       this.lastTickAt = now;
       const currentId = this.gameState().currentPlayerId;
-      this.playerTimes.update(times => ({
-        ...times,
-        [currentId]: (times[currentId] ?? 0) + delta,
-      }));
+      let timeExpired = false;
+      this.playerTimes.update(times => {
+        const prev = times[currentId] ?? 0;
+        const next = Math.max(0, prev - delta);
+        if (prev > 0 && next === 0) {
+          timeExpired = true;
+        }
+        return {
+          ...times,
+          [currentId]: next,
+        };
+      });
+      if (timeExpired) {
+        // Auto-rotate turn when a player's time runs out
+        this.rotateTurn();
+      }
     }, 1000);
   }
 
@@ -107,8 +120,22 @@ export class GameUiComponent {
   private rotateTurn() {
     const gs = this.gameState();
     const players = gs.players;
+    const times = this.playerTimes();
     const currentIndex = players.findIndex(p => p.id === gs.currentPlayerId);
-    const nextIndex = (currentIndex + 1) % players.length;
+
+    let nextIndex = (currentIndex + 1) % players.length;
+    let traversed = 0;
+    while (traversed < players.length && (times[players[nextIndex].id] ?? 0) <= 0) {
+      nextIndex = (nextIndex + 1) % players.length;
+      traversed++;
+    }
+
+    if (traversed >= players.length) {
+      // No players have remaining time; stop the timer and keep state unchanged
+      this.stopTimer();
+      return;
+    }
+
     this.gameState.update(s => ({
       ...s,
       currentPlayerId: players[nextIndex].id,
