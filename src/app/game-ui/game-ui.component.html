@@ -1,6 +1,6 @@
 <!-- Main Game Container -->
 <div class="bg-gray-800 text-white min-h-screen font-sans flex flex-col items-center justify-center p-4">
-  
+
   <div class="w-full max-w-7xl flex flex-col lg:flex-row gap-6">
 
     <!-- Left Panel: Player Info & Scores -->
@@ -23,12 +23,15 @@
         <h2 class="text-2xl font-bold mb-3 border-b border-gray-500 pb-2">Scores</h2>
         <div class="space-y-3">
           @for(player of gameState().players; track player.id) {
-            <div 
+            <div
               class="flex justify-between items-center p-3 rounded-md transition-all duration-300"
               [class.bg-yellow-500]="player.id === gameState().currentPlayerId"
               [class.text-gray-900]="player.id === gameState().currentPlayerId"
               [class.bg-gray-600]="player.id !== gameState().currentPlayerId">
-              <span class="font-bold text-lg">{{ player.name }}</span>
+              <div class="flex flex-col">
+                <span class="font-bold text-lg">{{ player.name }}</span>
+                <span class="text-sm font-mono opacity-90">⏱ {{ formatTime(playerTimes()[player.id]) }}</span>
+              </div>
               <span class="text-2xl font-mono">{{ player.score }}</span>
             </div>
           }
@@ -39,8 +42,8 @@
     <!-- Center Panel: Game Board -->
     <div class="lg:w-1/2 w-full order-1 lg:order-2 flex flex-col items-center">
         <!-- Warning Message -->
-        <div 
-            [class.opacity-100]="warningMessage()" 
+        <div
+            [class.opacity-100]="warningMessage()"
             [class.opacity-0]="!warningMessage()"
             class="absolute top-4 lg:top-8 bg-red-500 text-white px-6 py-2 rounded-lg shadow-xl transition-opacity duration-300 z-50 pointer-events-none">
             {{ warningMessage() }}
@@ -49,14 +52,14 @@
         <div class="aspect-square w-full max-w-2xl grid grid-cols-15 gap-0.5 p-2 bg-gray-900 rounded-md shadow-2xl">
             @for(row of displayBoard(); track $index) {
                 @for(square of row; track $index) {
-                    <div 
+                    <div
                         class="w-full h-full flex items-center justify-center rounded-sm cursor-pointer select-none transition-all duration-150"
                         [ngClass]="getSquareClasses(square)"
                         (click)="handleBoardClick(square.y, square.x)"
                         (dragover)="onBoardDragOver($event, square)"
                         (drop)="onBoardDrop($event, square)">
                         @if (square.tile) {
-                            <div 
+                            <div
                                 class="w-full h-full flex flex-col items-center justify-center rounded-md shadow-inner text-gray-900 font-bold text-xl relative"
                                 [class.bg-amber-200]="!square.isPlaced"
                                 [class.bg-green-300]="square.isPlaced"
@@ -93,12 +96,12 @@
           </button>
         </div>
       </div>
-      
+
       <div class="bg-gray-900 p-4 rounded-lg shadow-lg">
          <h3 class="text-xl font-bold mb-4 text-center">Your Rack</h3>
          <div class="flex justify-center items-center gap-1 bg-gray-700 p-2 rounded-lg min-h-[70px]">
             @for(tile of localPlayerRack(); track $index) {
-                <div 
+                <div
                     class="w-12 h-16 bg-amber-200 text-gray-900 rounded-md shadow-lg flex flex-col items-center justify-center font-bold text-2xl relative cursor-grab active:cursor-grabbing"
                     draggable="true"
                     (dragstart)="onDragStart($event, $index)"
@@ -135,7 +138,7 @@
         <p class="mb-4">Select tiles to exchange. This will end your turn.</p>
         <div class="flex justify-center items-center gap-2 bg-gray-800 p-2 rounded-lg min-h-[70px] mb-6">
            @for(tile of localPlayerRack(); track $index) {
-              <div 
+              <div
                   class="w-12 h-16 bg-amber-200 text-gray-900 rounded-md shadow-lg flex flex-col items-center justify-center font-bold text-2xl relative cursor-pointer"
                   [class.ring-4]="tilesToExchange().includes($index)"
                   [class.ring-yellow-400]="tilesToExchange().includes($index)"

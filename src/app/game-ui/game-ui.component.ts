@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, HostListener, signal, computed } from '@angular/core';
+import { ChangeDetectionStrategy, Component, HostListener, signal, computed, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { MongoService, Move } from '../services/mongo.service';
 
@@ -30,7 +30,7 @@ type Placement = { x: number; y: number; tile: Tile, isBlank?: boolean };
   styleUrl: './game-ui.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class GameUiComponent {
+export class GameUiComponent implements OnDestroy {
   // --- MOCK DATA AND CONSTANTS ---
   private readonly TILE_DISTRIBUTION: { [key: string]: { value: number; count: number } } = {
     'A': { value: 1, count: 9 }, 'B': { value: 3, count: 2 }, 'C': { value: 3, count: 2 }, 'D': { value: 2, count: 4 },
@@ -60,7 +60,23 @@ export class GameUiComponent {
   tilesToExchange = signal<number[]>([]);
   draggedTileIndex = signal<number | null>(null);
 
-  constructor(private mongoService: MongoService) { }
+  // --- TIMERS ---
+  playerTimes = signal<Record<number, number>>({});
+  private turnTimer: any = null;
+  private lastTickAt: number | null = null;
+
+  constructor(private mongoService: MongoService) {
+    // Initialize timers for all players to 0 and start the current player's timer
+    const initial: Record<number, number> = {};
+    for (const p of this.gameState().players) {
+      initial[p.id] = 0;
+    }
+    this.playerTimes.set(initial);
+
+    if (this.gameState().status === 'active') {
+      this.startTimerForCurrentPlayer();
+    }
+  }
 
   // --- COMPUTED SIGNALS ---
   currentPlayer = computed(() => this.gameState().players.find(p => p.id === this.gameState().currentPlayerId));
@@ -227,23 +243,22 @@ export class GameUiComponent {
         this.showWarning('Move submitted successfully!');
         console.log('Server response:', response);
 
-        // Update local state on success
+        // On successful submission, update the local state
         this.gameState.update(gs => {
             const newBoard = gs.board.map(row => row.map(square => ({...square})));
             this.currentPlacements().forEach(p => {
                 newBoard[p.y][p.x].tile = p.tile;
-                newBoard[p.y][p.x].isPlaced = false;
+                newBoard[p.y][p.x].isPlaced = false; // Mark as permanent
             });
-            const nextPlayerIndex = (gs.players.findIndex(p => p.id === gs.currentPlayerId) + 1) % gs.players.length;
+            
             return {
                 ...gs,
                 board: newBoard,
-                currentPlayerId: gs.players[nextPlayerIndex].id,
             };
         });
 
-        this.currentPlacements.set([]);
-        this.selectedSquare.set(null);
+        this.rotateTurn(); // Rotate turn after successful move
+
       },
       error: (error) => {
         console.error('Failed to submit move', error);
@@ -260,7 +275,8 @@ export class GameUiComponent {
     this.showPassConfirm.set(false);
     if (didPass) {
       console.log('Passing turn.');
-      // Send pass action to server
+      // In a real app, this would also be sent to the server
+      this.rotateTurn();
     }
   }
 
@@ -290,9 +306,10 @@ export class GameUiComponent {
   confirmExchange() {
     const tiles = this.tilesToExchange().map(index => this.localPlayerRack()[index]);
     console.log('Exchanging tiles:', tiles);
+    // In a real app, this would be sent to the server
     this.showExchangeDialog.set(false);
     this.tilesToExchange.set([]);
-    // Send exchange request to the server
+    this.rotateTurn(); // Example: rotate turn after exchange
   }
 
   // --- RACK DRAG & DROP ---
@@ -387,6 +404,55 @@ export class GameUiComponent {
       case 'start': return '★';
       default: return '';
     }
+  }
+
+  // --- TIMER LOGIC ---
+  private startTimerForCurrentPlayer() {
+    this.stopTimer();
+    this.lastTickAt = Date.now();
+    this.turnTimer = setInterval(() => {
+      const now = Date.now();
+      const delta = this.lastTickAt ? now - this.lastTickAt : 1000;
+      this.lastTickAt = now;
+      const currentId = this.gameState().currentPlayerId;
+      this.playerTimes.update(times => ({
+        ...times,
+        [currentId]: (times[currentId] ?? 0) + delta,
+      }));
+    }, 1000);
+  }
+
+  private stopTimer() {
+    if (this.turnTimer) {
+      clearInterval(this.turnTimer);
+      this.turnTimer = null;
+    }
+    this.lastTickAt = null;
+  }
+
+  private rotateTurn() {
+    const gs = this.gameState();
+    const players = gs.players;
+    const currentIndex = players.findIndex(p => p.id === gs.currentPlayerId);
+    const nextIndex = (currentIndex + 1) % players.length;
+    this.gameState.update(s => ({
+      ...s,
+      currentPlayerId: players[nextIndex].id,
+    }));
+    this.currentPlacements.set([]);
+    this.selectedSquare.set(null);
+    this.startTimerForCurrentPlayer();
+  }
+
+  formatTime(ms: number | undefined): string {
+    const total = Math.max(0, Math.floor((ms ?? 0) / 1000));
+    const mm = Math.floor(total / 60);
+    const ss = total % 60;
+    return `${mm.toString().padStart(2, '0')}:${ss.toString().padStart(2, '0')}`;
+  }
+
+  ngOnDestroy() {
+    this.stopTimer();
   }
 
   // --- INITIALIZATION ---
