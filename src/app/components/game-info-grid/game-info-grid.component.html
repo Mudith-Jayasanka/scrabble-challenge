@@ -1,0 +1,13 @@
+<div class="bg-gray-700 p-4 rounded-lg shadow-lg">
+  <h2 class="text-2xl font-bold mb-3 border-b border-gray-500 pb-2">Game Info</h2>
+  <div class="space-y-2 text-lg">
+    <div class="flex justify-between">
+      <span>Turn:</span>
+      <span class="font-semibold text-yellow-400">{{ stateManager.currentPlayer()?.name }}</span>
+    </div>
+    <div class="flex justify-between">
+      <span>Tiles in Bag:</span>
+      <span class="font-semibold">{{ stateManager.gameState().tileBagCount }}</span>
+    </div>
+  </div>
+</div>

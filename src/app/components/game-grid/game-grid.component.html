@@ -1,0 +1,34 @@
+<!-- Warning Message -->
+<div
+    [class.opacity-100]="stateManager.warningMessage()"
+    [class.opacity-0]="!stateManager.warningMessage()"
+    class="absolute top-4 lg:top-8 bg-red-500 text-white px-6 py-2 rounded-lg shadow-xl transition-opacity duration-300 z-50 pointer-events-none">
+    {{ stateManager.warningMessage() }}
+</div>
+
+<div class="aspect-square w-full max-w-2xl grid grid-cols-15 gap-0.5 p-2 bg-gray-900 rounded-md shadow-2xl">
+    @for(row of stateManager.displayBoard(); track $index) {
+        @for(square of row; track $index) {
+            <div
+                class="w-full h-full flex items-center justify-center rounded-sm cursor-pointer select-none transition-all duration-150"
+                [ngClass]="stateManager.getSquareClasses(square)"
+                (click)="stateManager.handleBoardClick(square.y, square.x)"
+                (dragover)="stateManager.onBoardDragOver($event, square)"
+                (drop)="stateManager.onBoardDrop($event, square)">
+                @if (square.tile) {
+                    <div
+                        class="w-full h-full flex flex-col items-center justify-center rounded-md shadow-inner text-gray-900 font-bold text-xl relative"
+                        [class.bg-amber-200]="!square.isPlaced"
+                        [class.bg-green-300]="square.isPlaced"
+                        [class.border-2]="square.isPlaced"
+                        [class.border-yellow-400]="square.isPlaced">
+                        <span>{{ square.tile.letter }}</span>
+                        <span class="absolute bottom-0 right-1 text-xs font-mono">{{ square.tile.value }}</span>
+                    </div>
+                } @else {
+                    <span class="text-xs font-semibold">{{ stateManager.getPremiumSquareText(square.type) }}</span>
+                }
+            </div>
+        }
+    }
+</div>

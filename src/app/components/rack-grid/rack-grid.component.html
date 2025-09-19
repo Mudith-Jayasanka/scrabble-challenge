@@ -1,0 +1,16 @@
+<div class="bg-gray-900 p-4 rounded-lg shadow-lg">
+  <h3 class="text-xl font-bold mb-4 text-center">Your Rack</h3>
+  <div class="flex justify-center items-center gap-1 bg-gray-700 p-2 rounded-lg min-h-[70px]">
+    @for(tile of stateManager.localPlayerRack(); track $index) {
+        <div
+            class="w-12 h-16 bg-amber-200 text-gray-900 rounded-md shadow-lg flex flex-col items-center justify-center font-bold text-2xl relative cursor-grab active:cursor-grabbing"
+            draggable="true"
+            (dragstart)="stateManager.onDragStart($event, $index)"
+            (dragover)="stateManager.onDragOver($event)"
+            (drop)="stateManager.onDrop($event, $index)">
+            <span>{{ tile.letter }}</span>
+            <span class="absolute bottom-0 right-1 text-xs font-mono">{{ tile.value }}</span>
+        </div>
+    }
+  </div>
+</div>

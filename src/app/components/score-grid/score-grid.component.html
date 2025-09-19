@@ -1,0 +1,18 @@
+<div class="bg-gray-700 p-4 rounded-lg shadow-lg">
+  <h2 class="text-2xl font-bold mb-3 border-b border-gray-500 pb-2">Scores</h2>
+  <div class="space-y-3">
+    @for(player of stateManager.gameState().players; track player.id) {
+      <div
+        class="flex justify-between items-center p-3 rounded-md transition-all duration-300"
+        [class.bg-yellow-500]="player.id === stateManager.gameState().currentPlayerId"
+        [class.text-gray-900]="player.id === stateManager.gameState().currentPlayerId"
+        [class.bg-gray-600]="player.id !== stateManager.gameState().currentPlayerId">
+        <div class="flex flex-col">
+          <span class="font-bold text-lg">{{ player.name }}</span>
+          <span class="text-sm font-mono opacity-90">⏱ {{ stateManager.formatTime(stateManager.playerTimes()[player.id]) }}</span>
+        </div>
+        <span class="text-2xl font-mono">{{ player.score }}</span>
+      </div>
+    }
+  </div>
+</div>
