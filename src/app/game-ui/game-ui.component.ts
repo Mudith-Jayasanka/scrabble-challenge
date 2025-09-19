@@ -47,7 +47,7 @@ export class GameUiComponent {
   // --- SIGNALS FOR STATE MANAGEMENT ---
   gameState = signal<GameState>(this.createInitialGameState());
   localPlayerRack = signal<Tile[]>(this.gameState().players.find(p => p.id === this.LOCAL_PLAYER_ID)!.rack);
-  
+
   // UI Interaction State
   selectedSquare = signal<{ x: number; y: number } | null>(null);
   direction = signal<'horizontal' | 'vertical'>('horizontal');
@@ -59,11 +59,82 @@ export class GameUiComponent {
   tilesToExchange = signal<number[]>([]);
   draggedTileIndex = signal<number | null>(null);
 
+  // --- TIMERS ---
+  // Track elapsed milliseconds per player id
+  playerTimes = signal<Record<number, number>>({});
+  private turnTimer: any = null;
+  private lastTickAt: number | null = null;
+
+  constructor() {
+    // Initialize timers for all players to 0 and start the current player's timer
+    const initial: Record<number, number> = {};
+    for (const p of this.gameState().players) {
+      initial[p.id] = 0;
+    }
+    this.playerTimes.set(initial);
+
+    if (this.gameState().status === 'active') {
+      this.startTimerForCurrentPlayer();
+    }
+  }
+
+  // Start/resume the timer for the current player
+  private startTimerForCurrentPlayer() {
+    this.stopTimer();
+    this.lastTickAt = Date.now();
+    this.turnTimer = setInterval(() => {
+      const now = Date.now();
+      const delta = this.lastTickAt ? now - this.lastTickAt : 1000;
+      this.lastTickAt = now;
+      const currentId = this.gameState().currentPlayerId;
+      this.playerTimes.update(times => ({
+        ...times,
+        [currentId]: (times[currentId] ?? 0) + delta,
+      }));
+    }, 1000);
+  }
+
+  // Stop the active timer
+  private stopTimer() {
+    if (this.turnTimer) {
+      clearInterval(this.turnTimer);
+      this.turnTimer = null;
+    }
+    this.lastTickAt = null;
+  }
+
+  // Rotate to next player's turn and switch timers
+  private rotateTurn() {
+    const gs = this.gameState();
+    const players = gs.players;
+    const currentIndex = players.findIndex(p => p.id === gs.currentPlayerId);
+    const nextIndex = (currentIndex + 1) % players.length;
+    this.gameState.update(s => ({
+      ...s,
+      currentPlayerId: players[nextIndex].id,
+    }));
+    this.currentPlacements.set([]);
+    this.selectedSquare.set(null);
+    this.startTimerForCurrentPlayer();
+  }
+
+  // Format milliseconds as mm:ss
+  formatTime(ms: number | undefined): string {
+    const total = Math.max(0, Math.floor((ms ?? 0) / 1000));
+    const mm = Math.floor(total / 60);
+    const ss = total % 60;
+    return `${mm.toString().padStart(2, '0')}:${ss.toString().padStart(2, '0')}`;
+  }
+
+  ngOnDestroy() {
+    this.stopTimer();
+  }
+
 
   // --- COMPUTED SIGNALS ---
   currentPlayer = computed(() => this.gameState().players.find(p => p.id === this.gameState().currentPlayerId));
   isMyTurn = computed(() => this.gameState().currentPlayerId === this.LOCAL_PLAYER_ID);
-  
+
   // Board that includes current unsubmitted placements for rendering
   displayBoard = computed(() => {
     const boardCopy = this.gameState().board.map(row => row.map(square => ({...square})));
@@ -97,7 +168,7 @@ export class GameUiComponent {
       }
       return;
     }
-    
+
     // Check for letter input
     if (event.key.length === 1 && event.key.match(/[a-zA-Z ]/)) {
       event.preventDefault();
@@ -135,10 +206,10 @@ export class GameUiComponent {
     if (x >= this.BOARD_SIZE || y >= this.BOARD_SIZE) {
        return this.showWarning('Word extends beyond the board edge!');
     }
-    
+
     // Add placement
     this.currentPlacements.update(placements => [
-      ...placements, 
+      ...placements,
       { x, y, tile: {letter: letter, value: isBlank ? 0 : tileToUse.value}, isBlank }
     ]);
   }
@@ -168,7 +239,7 @@ export class GameUiComponent {
     const lastPlacement = this.currentPlacements()[this.currentPlacements().length - 1];
     let nextX = lastPlacement.x;
     let nextY = lastPlacement.y;
-    
+
     const board = this.gameState().board;
     do {
       if (this.direction() === 'horizontal') {
@@ -190,7 +261,7 @@ export class GameUiComponent {
   handleBoardClick(y: number, x: number) {
     // Cannot change selection if a move is in progress
     if (this.currentPlacements().length > 0) return;
-    
+
     const currentSelection = this.selectedSquare();
     if (currentSelection && currentSelection.x === x && currentSelection.y === y) {
       // Toggle direction on same square click
@@ -213,17 +284,20 @@ export class GameUiComponent {
     // For now, let's just clear them for the next turn mock
     this.currentPlacements.set([]);
     this.selectedSquare.set(null);
+    // Rotate to next player's turn
+    this.rotateTurn();
   }
 
   passTurn() {
     this.showPassConfirm.set(true);
   }
-  
+
   confirmPass(didPass: boolean) {
     this.showPassConfirm.set(false);
     if (didPass) {
       console.log('Passing turn.');
       // Send pass action to server
+      this.rotateTurn();
     }
   }
 
@@ -239,7 +313,7 @@ export class GameUiComponent {
     this.tilesToExchange.set([]);
     this.showExchangeDialog.set(true);
   }
-  
+
   toggleTileForExchange(index: number) {
     this.tilesToExchange.update(indices => {
         if (indices.includes(index)) {
@@ -295,14 +369,14 @@ export class GameUiComponent {
   onBoardDrop(event: DragEvent, square: BoardSquare) {
     event.preventDefault();
     const draggedIndex = this.draggedTileIndex();
-    
+
     // Can't drop if nothing is being dragged or square is occupied
     if (draggedIndex === null || square.tile) {
       return;
     }
 
     const tile = this.localPlayerRack()[draggedIndex];
-    
+
     // This is a simple, direct placement.
     // A full implementation would need to manage the word's direction and contiguity.
     this.currentPlacements.update(placements => [
@@ -327,7 +401,7 @@ export class GameUiComponent {
     clearTimeout(this.warningTimeout);
     this.warningTimeout = setTimeout(() => this.warningMessage.set(null), 3000);
   }
-  
+
   getSquareClasses(square: BoardSquare): string {
     const classes: {[key: string]: boolean} = {
       'bg-green-800': square.type === 'normal',
@@ -366,7 +440,7 @@ export class GameUiComponent {
       status: 'active',
     };
   }
-  
+
   private createEmptyBoard(): BoardSquare[][] {
     const board: BoardSquare[][] = [];
     const premiumSquares: { [key: string]: SquareType } = {
