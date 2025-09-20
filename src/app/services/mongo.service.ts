@@ -7,12 +7,13 @@ import { environment } from '../../environments/environment';
 })
 export class MongoService {
   private db: Db | undefined;
-  // The connection string is loaded from the environment file.
-  private uri = environment.mongodb_uri; 
+  // The connection string and db name are loaded from the environment file.
+  private uri = environment.mongodb_uri;
+  private dbName = (environment as any).mongodb_dbName || 'scrabble';
   private client: MongoClient;
 
   constructor() {
-    // IMPORTANT: Replace <db_password> in your `src/environments/environment.ts` file.
+    // IMPORTANT: Replace %3Cdb_password%3E in your `src/environments/environment.ts` file with the actual password.
     this.client = new MongoClient(this.uri);
   }
 
@@ -22,11 +23,9 @@ export class MongoService {
   async connect(): Promise<void> {
     try {
       await this.client.connect();
-      // --- IMPORTANT ---
-      // You must specify the database name you want to connect to.
-      // Replace 'your_database_name' with your actual database name.
-      this.db = this.client.db('your_database_name'); 
-      console.log('Successfully connected to MongoDB');
+      // Use the configured database name
+      this.db = this.client.db(this.dbName);
+      console.log('Successfully connected to MongoDB DB=', this.dbName);
     } catch (error) {
       console.error('Error connecting to MongoDB', error);
       // Re-throw the error to be handled by the calling code

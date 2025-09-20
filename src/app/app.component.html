@@ -1,1 +1,112 @@
-<app-game-ui></app-game-ui>
+<div class="app-shell">
+  <div class="container">
+    <header class="app-header">
+      <h1 class="text-3xl"><i class="fa-solid fa-table-cells-large" aria-hidden="true"></i> Scrabble Challenge</h1>
+      <div class="user-area">
+        @if (isLoggedIn()) {
+          <span class="badge">Signed in as <strong>{{ username }}</strong></span>
+          <button (click)="logout()" class="btn btn-red" title="Logout"><i class="fa-solid fa-right-from-bracket"></i> Logout</button>
+        } @else {
+          <span class="badge">Not signed in</span>
+        }
+      </div>
+    </header>
+
+    @if (!modeSelected()) {
+      <!-- Landing: Choose mode -->
+      <section class="grid-2">
+        <!-- Bot Card -->
+        <div class="card">
+          <div>
+            <h2><i class="fa-solid fa-robot" aria-hidden="true"></i> Play vs Bot</h2>
+            <p class="badge">Instant game. Login not required.</p>
+          </div>
+          <div style="margin-top:12px;">
+            <label class="block text-sm mb-1">Your name (optional)</label>
+            <input [(ngModel)]="guestName" name="guestName" class="input" placeholder="Guest" />
+          </div>
+          <div style="margin-top:16px;">
+            <button (click)="selectMode('bot')" class="btn btn-green"><i class="fa-solid fa-play"></i> Start vs Bot</button>
+          </div>
+        </div>
+
+        <!-- Human Card -->
+        <div class="card">
+          <div>
+            <h2><i class="fa-solid fa-user-group" aria-hidden="true"></i> Play vs Human</h2>
+            <p class="badge">Online match. Login is required.</p>
+          </div>
+          <div style="margin-top:16px;">
+            <button (click)="selectMode('human')" class="btn btn-blue">
+              <i class="fa-solid" [class.fa-people-group]="isLoggedIn()" [class.fa-right-to-bracket]="!isLoggedIn()"></i>
+              {{ isLoggedIn() ? 'Find Opponent' : 'Login to Play' }}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Waiting Modal -->
+      @if (waitingForOpponent()) {
+        <div class="modal-backdrop">
+          <div class="modal" style="text-align:center;">
+            <h3 style="margin-bottom:8px;">Looking for another player…</h3>
+            <p class="badge" style="display:block; margin-bottom:16px;">{{ waitingMessage() }}</p>
+            <button class="btn" (click)="cancelMatchmaking()"><i class="fa-solid fa-xmark"></i> Cancel</button>
+          </div>
+        </div>
+      }
+    } @else {
+      <!-- In-game header -->
+      <div class="app-header" style="padding-top:8px; padding-bottom:8px;">
+        <div>
+          <div>Mode: <strong>{{ modeSelected() === 'bot' ? 'Bot' : 'Online vs Human' }}</strong></div>
+          <div class="badge">Player: <span>{{ displayName() }}</span></div>
+        </div>
+        <button (click)="modeSelected.set(null)" class="btn" (click)="cancelMatchmaking()"><i class="fa-solid fa-arrow-left"></i> Back</button>
+      </div>
+      <!-- Game -->
+      <app-game-ui [playerName]="displayName()" [botMode]="modeSelected() === 'bot'" [roomId]="roomId()" [preferredId]="preferredId()"></app-game-ui>
+    }
+  </div>
+
+  <!-- Auth Modal for Human mode -->
+  @if (showAuthModal()) {
+    <div class="modal-backdrop">
+      <div class="modal">
+        <div class="app-header" style="padding:0 0 12px 0;">
+          <h3>{{ isRegisterMode ? 'Create Account' : 'Login' }}</h3>
+          <button (click)="closeAuthModal()" class="btn" title="Close"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        @if (authError) {
+          <div class="card" style="background:#fee2e2; color:#991b1b; padding:12px;">{{ authError }}</div>
+        }
+        <form (submit)="$event.preventDefault(); isRegisterMode ? register() : login()" style="margin-top:12px;">
+          <div class="mb-3" style="margin-bottom:12px;">
+            <label class="block text-sm mb-1">Username</label>
+            <input [(ngModel)]="username" name="username" class="input" required />
+          </div>
+          <div class="mb-3" style="margin-bottom:12px;">
+            <label class="block text-sm mb-1">Password</label>
+            <input type="password" [(ngModel)]="password" name="password" class="input" required />
+          </div>
+          @if (isRegisterMode) {
+            <div class="mb-3" style="margin-bottom:12px;">
+              <label class="block text-sm mb-1">Email (optional)</label>
+              <input type="email" [(ngModel)]="email" name="email" class="input" />
+            </div>
+          }
+          <div class="actions" style="margin-top:8px;">
+            <button type="submit" class="btn" [ngClass]="isRegisterMode ? 'btn-red' : 'btn-blue'">
+              <i class="fa-solid" [class.fa-user-plus]="isRegisterMode" [class.fa-right-to-bracket]="!isRegisterMode"></i>
+              {{ isRegisterMode ? 'Create Account' : 'Login' }}
+            </button>
+            <button type="button" (click)="isRegisterMode = !isRegisterMode" class="btn">
+              <i class="fa-solid fa-arrows-rotate"></i>
+              {{ isRegisterMode ? 'Have an account? Login' : 'First time? Create account' }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  }
+</div>

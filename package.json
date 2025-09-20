@@ -3,10 +3,11 @@
   "version": "0.0.0",
   "scripts": {
     "ng": "ng",
-    "start": "ng serve",
+    "start": "concurrently -k -n FE,BE -c green,blue \"ng serve\" \"node server.js\"",
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
-    "test": "ng test"
+    "test": "ng test",
+    "ws-server": "node server.js"
   },
   "private": true,
   "dependencies": {
@@ -18,9 +19,16 @@
     "@angular/platform-browser": "^17.3.0",
     "@angular/platform-browser-dynamic": "^17.3.0",
     "@angular/router": "^17.3.0",
-    "mongodb": "^6.20.0",
+    "bcrypt": "^5.1.1",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.6.1",
     "rxjs": "~7.8.0",
+    "socket.io": "^4.7.5",
+    "socket.io-client": "^4.7.5",
     "tslib": "^2.3.0",
+    "ws": "^8.17.1",
     "zone.js": "~0.14.3"
   },
   "devDependencies": {
@@ -28,7 +36,7 @@
     "@angular/cli": "^17.3.17",
     "@angular/compiler-cli": "^17.3.0",
     "@types/jasmine": "~5.1.0",
-    "@types/mongodb": "^4.0.7",
+    "concurrently": "^8.2.2",
     "jasmine-core": "~5.1.0",
     "karma": "~6.4.0",
     "karma-chrome-launcher": "~3.2.0",

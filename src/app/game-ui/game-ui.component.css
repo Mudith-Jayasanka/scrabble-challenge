@@ -124,7 +124,7 @@
 .duration-300 { transition-duration: 300ms; }
 
 /* Transforms */
-.transform { 
+.transform {
   --tw-translate-x: 0;
   --tw-translate-y: 0;
   --tw-rotate: 0;
@@ -132,7 +132,7 @@
   --tw-skew-y: 0;
   --tw-scale-x: 1;
   --tw-scale-y: 1;
-  transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y)); 
+  transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
 }
 
 /* Interactivity */
@@ -164,4 +164,38 @@
   .lg\:order-2 { order: 2; }
   .lg\:order-3 { order: 3; }
   .lg\:top-8 { top: 2rem; }
+}
+
+/* Viewport fit scaling wrappers */
+.fit-viewport {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+.fit-inner {
+  will-change: transform;
+}
+
+/* Playground look and light theme overrides */
+.playground {
+  /* Soft field-like gradient */
+  background: radial-gradient(1200px 600px at 50% 0%, #dffbe0 0%, #f3fff3 40%, #ffffff 100%);
+  color: #1f2937; /* dark text for readability */
+}
+
+.card-light {
+  background: #ffffff;
+  color: #1f2937;
+}
+
+.board-frame {
+  background: linear-gradient(180deg, #2e7d32, #1b5e20);
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,0.08);
+}
+
+.rack-bg {
+  background: #f6efe3; /* light sand/wood tone */
 }

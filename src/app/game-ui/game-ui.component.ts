@@ -1,5 +1,6 @@
-import { ChangeDetectionStrategy, Component, HostListener, signal, computed } from '@angular/core';
+import { ChangeDetectionStrategy, Component, HostListener, signal, computed, inject, Input, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { WsService, WSAction } from '../ws.service';
 
 // --- TYPE DEFINITIONS ---
 type Tile = { letter: string; value: number };
@@ -29,7 +30,7 @@ type Placement = { x: number; y: number; tile: Tile, isBlank?: boolean };
   styleUrl: './game-ui.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class GameUiComponent {
+export class GameUiComponent implements OnInit {
   // --- MOCK DATA AND CONSTANTS ---
   private readonly TILE_DISTRIBUTION: { [key: string]: { value: number; count: number } } = {
     'A': { value: 1, count: 9 }, 'B': { value: 3, count: 2 }, 'C': { value: 3, count: 2 }, 'D': { value: 2, count: 4 },
@@ -42,13 +43,48 @@ export class GameUiComponent {
   };
 
   private readonly BOARD_SIZE = 15;
-  private readonly LOCAL_PLAYER_ID = 1;
+  private LOCAL_PLAYER_ID = 1;
+  private ws = inject(WsService);
+  onlineMode = false;
+  private isHost = false;
 
   // --- TILE BAG & DICTIONARY ---
   // Central tile bag built from distribution and shuffled
   private tileBag: Tile[] = this.buildTileBag();
   // Simple dictionary placeholder; replace with real list for production
   private dictionary: Set<string> = this.loadDefaultDictionary();
+
+  // Attempt to load an external dictionary from assets at runtime (if provided)
+  private loadExternalDictionaryFromAssets(): void {
+    try {
+      fetch('assets/dictionary.txt')
+        .then(resp => {
+          if (!resp.ok) throw new Error('No external dictionary found');
+          return resp.text();
+        })
+        .then(text => {
+          const words: string[] = [];
+          text.split(/\r?\n/).forEach((line) => {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) return;
+            // Take only the headword (first whitespace-delimited token) and discard definitions/metadata
+            const firstToken = trimmed.split(/\s+/)[0] || '';
+            // Keep letters only (A-Z); discard any other characters like punctuation or brackets
+            const lettersOnly = firstToken.replace(/[^A-Za-z]/g, '');
+            if (lettersOnly.length > 0) words.push(lettersOnly.toUpperCase());
+          });
+          if (words.length > 0) {
+            this.dictionary = new Set(words);
+            // console.log('[Dictionary] Loaded', this.dictionary.size, 'words from assets/dictionary.txt');
+          }
+        })
+        .catch(() => {
+          // Ignore if file not present or fetch fails; fallback dictionary remains
+        });
+    } catch {
+      // Environments without fetch or other unexpected errors; keep fallback
+    }
+  }
 
   // --- SIGNALS FOR STATE MANAGEMENT ---
   gameState = signal<GameState>(this.createInitialGameState());
@@ -73,6 +109,16 @@ export class GameUiComponent {
   private lastTickAt: number | null = null;
 
 
+  @Input() roomId: string | null = null;
+  @Input() playerName: string | null = null;
+  @Input() botMode: boolean = false;
+  @Input() preferredId: number | null = null;
+
+  // Viewport fit scaling
+  scale = signal(1);
+  readonly BASE_W = 1200;
+  readonly BASE_H = 820;
+
   constructor() {
     // Initialize timers for all players to 0 and start the current player's timer
     const initial: Record<number, number> = {};
@@ -85,6 +131,114 @@ export class GameUiComponent {
     if (this.gameState().status === 'active') {
       this.startTimerForCurrentPlayer();
     }
+
+    // Try to load external dictionary from assets if present
+    this.loadExternalDictionaryFromAssets();
+  }
+
+  ngOnInit(): void {
+    // Multiplayer: connect via WebSocket if room is provided by input or URL
+    const directRoom = this.roomId;
+    const directName = this.playerName;
+    let room: string | null = directRoom;
+    let name: string = directName || 'Player';
+
+    if (!room) {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        room = params.get('room');
+        name = params.get('name') || name;
+      } catch { /* ignore */ }
+    }
+
+    if (room) {
+      this.setupOnline(room, name);
+      return;
+    }
+
+    // Offline mode: set player display names
+    this.gameState.update(s => ({
+      ...s,
+      players: s.players.map(p => ({
+        ...p,
+        name: p.id === 1 ? (this.playerName || 'You') : (this.botMode ? 'Bot' : 'Player 2')
+      }))
+    }));
+    // Ensure local player is player 1 in offline
+    this.LOCAL_PLAYER_ID = 1;
+
+    // If bot starts, schedule its move
+    if (this.botMode && this.gameState().currentPlayerId === 2) {
+      this.scheduleBotMove();
+    }
+
+    // Ensure the game area scales to fit the viewport without scrolling
+    this.updateScale();
+  }
+
+  private setupOnline(room: string, name: string) {
+    this.onlineMode = true;
+    this.ws.onWelcome = ({ playerId, isHost }) => {
+      this.LOCAL_PLAYER_ID = playerId;
+      this.isHost = isHost;
+      if (isHost) {
+        // Ensure Player 1 starts in online games
+        this.gameState.update(s => ({ ...s, currentPlayerId: 1 }));
+      } else {
+        // Pause local timers until we receive the full state
+        this.stopTimer();
+      }
+    };
+    this.ws.onRequestState = (targetPlayerId) => {
+      if (this.isHost) {
+        this.ws.sendFullState(targetPlayerId, this.exportState());
+      }
+    };
+    this.ws.onFullState = (payload) => {
+      this.importState(payload);
+      // Start timer for the current player after sync
+      this.startTimerForCurrentPlayer();
+    };
+    this.ws.onAction = (action, senderId) => {
+      if (!this.isHost) {
+        // Only host applies actions
+        return;
+      }
+      const currentId = this.gameState().currentPlayerId;
+      if (senderId !== currentId) {
+        // Ignore actions not from the active player
+        return;
+      }
+      if (action.kind === 'submit_move') {
+        // Host applies the move and then broadcasts the authoritative state
+        this.commitMoveCore(action.placements);
+        this.ws.sendFullStateBroadcast(this.exportState());
+      } else if (action.kind === 'pass') {
+        this.rotateTurn();
+        this.ws.sendFullStateBroadcast(this.exportState());
+      }
+    };
+    this.ws.onBecameHost = () => {
+      this.isHost = true;
+    };
+    // When roster information arrives, the host updates player names and broadcasts state
+    this.ws.onRoster = (players) => {
+      if (!this.isHost) return;
+      const nameById = new Map(players.map(p => [p.id, p.name] as const));
+      let changed = false;
+      this.gameState.update(s => {
+        const updatedPlayers = s.players.map(p => {
+          const newName = nameById.get(p.id) || p.name;
+          if (newName !== p.name) changed = true;
+          return { ...p, name: newName };
+        });
+        return { ...s, players: updatedPlayers };
+      });
+      if (changed) {
+        this.ws.sendFullStateBroadcast(this.exportState());
+      }
+    };
+    this.ws.connect(room, name, this.preferredId ?? undefined);
   }
 
   // Start/resume the timer for the current player
@@ -155,6 +309,11 @@ export class GameUiComponent {
     this.currentPlacements.set([]);
     this.selectedSquare.set(null);
     this.startTimerForCurrentPlayer();
+
+    // If bot mode and it's bot's turn, schedule bot move
+    if (this.isBotTurn()) {
+      this.scheduleBotMove();
+    }
   }
 
   // Format milliseconds as mm:ss
@@ -169,10 +328,32 @@ export class GameUiComponent {
     this.stopTimer();
   }
 
+  // --- VIEWPORT FIT SCALING ---
+  @HostListener('window:resize')
+  onResize() {
+    this.updateScale();
+  }
+
+  private updateScale() {
+    try {
+      const vw = window.innerWidth || 1200;
+      const vh = window.innerHeight || 800;
+      const margin = 16; // small padding
+      const scaleX = (vw - margin * 2) / this.BASE_W;
+      const scaleY = (vh - margin * 2) / this.BASE_H;
+      const s = Math.min(scaleX, scaleY, 1);
+      this.scale.set(s > 0 ? s : 1);
+    } catch {
+      this.scale.set(1);
+    }
+  }
+
 
   // --- COMPUTED SIGNALS ---
   currentPlayer = computed(() => this.gameState().players.find(p => p.id === this.gameState().currentPlayerId));
-  isMyTurn = computed(() => this.gameState().currentPlayerId === this.LOCAL_PLAYER_ID);
+  // In offline mode (bot or local hot‑seat), always allow input so turns rotate seamlessly on one device.
+  // In online mode, restrict input to the local player's turn.
+  isMyTurn = computed(() => this.onlineMode ? (this.gameState().currentPlayerId === this.LOCAL_PLAYER_ID) : true);
 
   // Board that includes current unsubmitted placements for rendering
   displayBoard = computed(() => {
@@ -445,6 +626,128 @@ export class GameUiComponent {
     return { main, cross };
   }
 
+  // --- SCORING HELPERS ---
+  private computeMoveScore(boardAfter: BoardSquare[][], placements: Placement[]): number {
+    if (placements.length === 0) return 0;
+
+    const placedSet = new Set(placements.map(p => `${p.x},${p.y}`));
+
+    const hasTile = (x: number, y: number) => {
+      if (x < 0 || y < 0 || x >= this.BOARD_SIZE || y >= this.BOARD_SIZE) return false;
+      return !!boardAfter[y][x].tile;
+    };
+
+    const collectWordCells = (x: number, y: number, dx: number, dy: number) => {
+      // step to beginning
+      let cx = x, cy = y;
+      while (hasTile(cx - dx, cy - dy)) { cx -= dx; cy -= dy; }
+      const cells: { x: number; y: number; tile: Tile; square: BoardSquare; isNew: boolean }[] = [];
+      while (hasTile(cx, cy)) {
+        const square = boardAfter[cy][cx];
+        cells.push({ x: cx, y: cy, tile: square.tile!, square, isNew: placedSet.has(`${cx},${cy}`) });
+        cx += dx; cy += dy;
+      }
+      return cells;
+    };
+
+    // Determine main direction
+    const xs = placements.map(p => p.x);
+    const ys = placements.map(p => p.y);
+    const sameRow = ys.every(y => y === ys[0]);
+
+    let mainDir: { dx: number; dy: number };
+    let anchor = placements[0];
+    if (placements.length === 1) {
+      const h = collectWordCells(anchor.x, anchor.y, 1, 0);
+      const v = collectWordCells(anchor.x, anchor.y, 0, 1);
+      mainDir = (v.length >= h.length) ? { dx: 0, dy: 1 } : { dx: 1, dy: 0 };
+    } else {
+      mainDir = sameRow ? { dx: 1, dy: 0 } : { dx: 0, dy: 1 };
+    }
+
+    const scoreWord = (cells: { tile: Tile; square: BoardSquare; isNew: boolean }[]) => {
+      if (cells.length < 2) return 0;
+      let wordMultiplier = 1;
+      let letterSum = 0;
+      for (const c of cells) {
+        let letterScore = c.tile.value;
+        if (c.isNew) {
+          if (c.square.type === 'double-letter') letterScore *= 2;
+          else if (c.square.type === 'triple-letter') letterScore *= 3;
+          else if (c.square.type === 'double-word' || c.square.type === 'start') wordMultiplier *= 2;
+          else if (c.square.type === 'triple-word') wordMultiplier *= 3;
+        }
+        letterSum += letterScore;
+      }
+      return letterSum * wordMultiplier;
+    };
+
+    // Main word
+    const mainCells = collectWordCells(anchor.x, anchor.y, mainDir.dx, mainDir.dy);
+    let total = scoreWord(mainCells);
+
+    // Cross words for each placement
+    const perp = mainDir.dx === 1 ? { dx: 0, dy: 1 } : { dx: 1, dy: 0 };
+    for (const p of placements) {
+      const crossCells = collectWordCells(p.x, p.y, perp.dx, perp.dy);
+      if (crossCells.length >= 2) {
+        total += scoreWord(crossCells);
+      }
+    }
+
+    return total;
+  }
+
+  // Apply a move using provided placements (used for both offline and remote actions)
+  private commitMoveCore(placements: Placement[]) {
+    if (placements.length === 0) return;
+
+    // Commit placements to the board
+    const board = this.gameState().board.map(row => row.map(sq => ({ ...sq })));
+    for (const p of placements) {
+      board[p.y][p.x] = { ...board[p.y][p.x], tile: { ...p.tile }, isPlaced: false };
+    }
+
+    // Compute score for this move on the updated board
+    const moveScore = this.computeMoveScore(board, placements);
+
+    // Remove used tiles from rack and refill
+    const currentId = this.gameState().currentPlayerId;
+    const playerIndex = this.gameState().players.findIndex(p => p.id === currentId);
+    const playersCopy = this.gameState().players.map(p => ({ ...p, rack: [...p.rack] }));
+    const rack = playersCopy[playerIndex].rack;
+
+    for (const p of placements) {
+      const targetLetter = p.isBlank ? ' ' : p.tile.letter;
+      const idx = rack.findIndex(t => t.letter === targetLetter);
+      if (idx !== -1) rack.splice(idx, 1);
+    }
+
+    const toDraw = Math.max(0, 7 - rack.length);
+    const drawn = this.drawTiles(toDraw);
+    rack.push(...drawn);
+    playersCopy[playerIndex].rack = rack;
+
+    // Apply score
+    playersCopy[playerIndex].score = (playersCopy[playerIndex].score || 0) + moveScore;
+
+    // Update state
+    this.gameState.update(s => ({
+      ...s,
+      board,
+      players: playersCopy,
+      tileBagCount: this.tileBag.length,
+    }));
+
+    // Update visible rack for active player
+    this.localPlayerRack.set([...playersCopy[playerIndex].rack]);
+
+    // Clear placement state and rotate
+    this.currentPlacements.set([]);
+    this.selectedSquare.set(null);
+    this.rotateTurn();
+  }
+
 
   // --- USER ACTIONS ---
   handleBoardClick(y: number, x: number) {
@@ -462,6 +765,12 @@ export class GameUiComponent {
   }
 
   submitMove() {
+    // Enforce turn ownership in online mode
+    if (this.onlineMode && !this.isMyTurn()) {
+      this.showWarning("It's not your turn!");
+      return;
+    }
+
     if (this.currentPlacements().length === 0) {
       this.passTurn();
       return;
@@ -473,70 +782,191 @@ export class GameUiComponent {
       return;
     }
 
-    // Commit placements to the board
     const placements = this.currentPlacements();
-    const board = this.gameState().board.map(row => row.map(sq => ({ ...sq })));
-    for (const p of placements) {
-      board[p.y][p.x] = { ...board[p.y][p.x], tile: { ...p.tile }, isPlaced: false };
+
+    if (this.onlineMode) {
+      if (this.isHost) {
+        // Host applies immediately and broadcasts authoritative state
+        this.commitMoveCore(placements);
+        this.ws.sendFullStateBroadcast(this.exportState());
+        return;
+      } else {
+        // Non-host sends action and waits for host broadcast
+        this.ws.sendAction({ kind: 'submit_move', placements: placements.map(p => ({ x: p.x, y: p.y, tile: { letter: p.tile.letter, value: p.tile.value }, isBlank: p.isBlank })) });
+        this.currentPlacements.set([]);
+        this.selectedSquare.set(null);
+        return;
+      }
     }
 
-    // Remove used tiles from rack and refill
-    const currentId = this.gameState().currentPlayerId;
-    const playerIndex = this.gameState().players.findIndex(p => p.id === currentId);
-    const playersCopy = this.gameState().players.map(p => ({ ...p, rack: [...p.rack] }));
-    const rack = playersCopy[playerIndex].rack;
-
-    for (const p of placements) {
-      // For blanks, letter in rack is ' '
-      const targetLetter = p.isBlank ? ' ' : p.tile.letter;
-      const idx = rack.findIndex(t => t.letter === targetLetter);
-      if (idx !== -1) rack.splice(idx, 1);
-    }
-
-    // Sync visible rack with current player's rack after removing used tiles
-    const localRackAfterUse = [...rack];
-
-    // Draw tiles to refill to 7
-    const toDraw = Math.max(0, 7 - rack.length);
-    const drawn = this.drawTiles(toDraw);
-    rack.push(...drawn);
-    playersCopy[playerIndex].rack = rack;
-
-    // Update the visible rack for the current (active) player
-    this.localPlayerRack.set([...playersCopy[playerIndex].rack]);
-
-    // Update state
-    this.gameState.update(s => ({
-      ...s,
-      board,
-      players: playersCopy,
-      tileBagCount: this.tileBag.length,
-    }));
-
-    // Clear placement state and rotate
-    this.currentPlacements.set([]);
-    this.selectedSquare.set(null);
-    this.rotateTurn();
+    // Offline: apply immediately
+    this.commitMoveCore(placements);
   }
 
   passTurn() {
+    // Enforce turn ownership in online mode
+    if (this.onlineMode && !this.isMyTurn()) {
+      this.showWarning("It's not your turn!");
+      return;
+    }
     this.showPassConfirm.set(true);
+  }
+
+  // ---- BOT LOGIC ----
+  private isBotTurn(): boolean {
+    return !this.onlineMode && this.botMode && this.gameState().currentPlayerId === 2;
+  }
+
+  private scheduleBotMove() {
+    // Small delay for UX so users can see turn change
+    setTimeout(() => this.botPlay(), 800);
+  }
+
+  private botPlay() {
+    if (!this.isBotTurn()) return;
+
+    // Try to find a move
+    const placements = this.findBotMove();
+
+    if (placements.length > 0) {
+      this.commitMoveCore(placements);
+    } else {
+      // No move found: pass
+      this.rotateTurn();
+    }
+  }
+
+  private findBotMove(): Placement[] {
+    // First move strategy: play single letter on center if available and valid
+    if (this.isFirstMove()) {
+      const centerX = 7, centerY = 7;
+      const rack = [...(this.gameState().players.find(p => p.id === 2)!.rack)];
+      const tryLetters = ['A','I','O','E'];
+      for (const L of tryLetters) {
+        const useBlank = rack.findIndex(t => t.letter === ' ') !== -1 && rack.findIndex(t => t.letter === L) === -1;
+        const hasLetter = rack.findIndex(t => t.letter === L) !== -1 || useBlank;
+        if (!hasLetter) continue;
+        const placement: Placement = { x: centerX, y: centerY, tile: { letter: L, value: useBlank ? 0 : this.TILE_DISTRIBUTION[L].value }, isBlank: useBlank };
+        if (this.isPlacementValid([placement])) {
+          return [placement];
+        }
+      }
+    }
+
+    // Subsequent simple strategy: try to form any valid 2-letter word by placing one tile adjacent to existing tiles.
+    const board = this.gameState().board;
+    const rack = [...(this.gameState().players.find(p => p.id === 2)!.rack)];
+
+    let best: { placements: Placement[]; score: number } | null = null;
+
+    const dirs = [ [1,0], [-1,0], [0,1], [0,-1] ] as const;
+    for (let y = 0; y < this.BOARD_SIZE; y++) {
+      for (let x = 0; x < this.BOARD_SIZE; x++) {
+        const existing = board[y][x].tile;
+        if (!existing) continue;
+        for (const [dx,dy] of dirs) {
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= this.BOARD_SIZE || ny >= this.BOARD_SIZE) continue;
+          if (board[ny][nx].tile) continue; // must be empty
+
+          // Consider every rack letter and blank substitutions
+          const letterOptions = new Set<string>();
+          rack.forEach(t => { if (t.letter !== ' ') letterOptions.add(t.letter); });
+          // If any blank exists, it can be any A-Z
+          const hasBlank = rack.some(t => t.letter === ' ');
+          if (hasBlank) {
+            for (let c = 65; c <= 90; c++) letterOptions.add(String.fromCharCode(c));
+          }
+
+          for (const L of letterOptions) {
+            const usingBlank = !rack.some(t => t.letter === L) && hasBlank;
+            const placement: Placement = { x: nx, y: ny, tile: { letter: L, value: usingBlank ? 0 : this.TILE_DISTRIBUTION[L].value }, isBlank: usingBlank };
+            if (!this.isPlacementValid([placement])) continue;
+
+            // Score the move
+            const tempBoard = board.map(row => row.map(sq => ({ ...sq })));
+            tempBoard[ny][nx] = { ...tempBoard[ny][nx], tile: { ...placement.tile } };
+            const score = this.computeMoveScore(tempBoard, [placement]);
+            if (!best || score > best.score) {
+              best = { placements: [placement], score };
+            }
+          }
+        }
+      }
+    }
+
+    return best?.placements ?? [];
+  }
+
+  private isPlacementValid(placements: Placement[]): boolean {
+    // Temporarily set placements and validate using existing logic
+    const prevPlacements = this.currentPlacements();
+    const prevSelected = this.selectedSquare();
+    this.currentPlacements.set(placements);
+    if (placements.length > 0) {
+      this.selectedSquare.set({ x: placements[0].x, y: placements[0].y });
+    }
+    const valid = this.validateCurrentMove().ok;
+    // restore
+    this.currentPlacements.set(prevPlacements);
+    this.selectedSquare.set(prevSelected);
+    return valid;
+  }
+
+  // Export/import state for multiplayer sync
+  private exportState() {
+    return {
+      gameState: this.gameState(),
+      tileBag: this.tileBag,
+      playerTimes: this.playerTimes(),
+    };
+  }
+
+  private importState(payload: any) {
+    this.stopTimer();
+    if (payload.tileBag) this.tileBag = payload.tileBag;
+    if (payload.gameState) this.gameState.set(payload.gameState);
+    if (payload.playerTimes) this.playerTimes.set(payload.playerTimes);
+    // Update local rack to current player's rack
+    this.localPlayerRack.set(
+      this.gameState().players.find(p => p.id === this.gameState().currentPlayerId)!.rack
+    );
+    this.currentPlacements.set([]);
+    this.selectedSquare.set(null);
   }
 
   confirmPass(didPass: boolean) {
     this.showPassConfirm.set(false);
     if (didPass) {
       console.log('Passing turn.');
-      // Send pass action to server
+      if (this.onlineMode) {
+        if (this.isHost) {
+          // Host applies immediately and broadcasts authoritative state
+          this.rotateTurn();
+          this.ws.sendFullStateBroadcast(this.exportState());
+          return;
+        } else {
+          this.ws.sendAction({ kind: 'pass' });
+          return;
+        }
+      }
       this.rotateTurn();
     }
   }
 
   shuffleRack() {
+    if (this.onlineMode && !this.isMyTurn()) {
+      this.showWarning("It's not your turn!");
+      return;
+    }
     this.localPlayerRack.update(rack => [...rack].sort(() => Math.random() - 0.5));
   }
 
   openExchangeDialog() {
+    if (this.onlineMode && !this.isMyTurn()) {
+      this.showWarning("It's not your turn!");
+      return;
+    }
     if (this.currentPlacements().length > 0) {
         this.showWarning("Cannot exchange tiles while placing a word.");
         return;
@@ -565,6 +995,12 @@ export class GameUiComponent {
 
   // --- RACK DRAG & DROP ---
   onDragStart(event: DragEvent, index: number) {
+    // Disallow dragging tiles when it's not your turn in online mode
+    if (this.onlineMode && !this.isMyTurn()) {
+      event.preventDefault();
+      this.showWarning("It's not your turn!");
+      return;
+    }
     this.draggedTileIndex.set(index);
     if (event.dataTransfer) {
         event.dataTransfer.effectAllowed = 'move';
@@ -580,6 +1016,13 @@ export class GameUiComponent {
     const draggedIndex = this.draggedTileIndex();
     if (draggedIndex === null) return;
 
+    // Prevent reordering when not your turn in online mode
+    if (this.onlineMode && !this.isMyTurn()) {
+      this.showWarning("It's not your turn!");
+      this.draggedTileIndex.set(null);
+      return;
+    }
+
     this.localPlayerRack.update(rack => {
         const newRack = [...rack];
         const [draggedItem] = newRack.splice(draggedIndex, 1);
@@ -587,6 +1030,39 @@ export class GameUiComponent {
         return newRack;
     });
     this.draggedTileIndex.set(null);
+  }
+
+  // --- TOUCH-FRIENDLY: Tap a rack tile to place it at the selected square ---
+  onRackTileTap(index: number) {
+    // Only allow placing during user's turn
+    if (!this.isMyTurn()) {
+      this.showWarning("It's not your turn!");
+      return;
+    }
+    if (!this.selectedSquare()) {
+      this.showWarning('Tap a square on the board first to start your word.');
+      return;
+    }
+
+    const rack = this.localPlayerRack();
+    const tile = rack[index];
+    if (!tile) return;
+
+    // If the tile is a blank, ask user which letter to use
+    let letter = tile.letter;
+    let isBlank = false;
+    if (tile.letter === ' ') {
+      const input = (window.prompt('Choose a letter for the blank tile (A-Z):', 'A') || '').toUpperCase().trim();
+      if (!input.match(/^[A-Z]$/)) {
+        this.showWarning('Invalid letter. Please choose A-Z.');
+        return;
+      }
+      letter = input;
+      isBlank = true;
+    }
+
+    // Use existing placement logic which validates availability without removing from rack yet
+    this.placeLetter(letter, isBlank);
   }
 
   onBoardDragOver(event: DragEvent, square: BoardSquare) {
@@ -693,7 +1169,7 @@ export class GameUiComponent {
   // Dictionary loader (placeholder). Replace with file-based loader if provided.
   private loadDefaultDictionary(): Set<string> {
     const words = [
-      'A', 'I', 'AN', 'IN', 'ON', 'AT', 'TO', 'DO', 'GO', 'ME', 'HE', 'RE',
+      'A', 'I', 'AN', 'IN', 'ON', 'AT', 'TO', 'DO', 'GO', 'ME', 'HE', 'RE', 'PIE',
       'CAT', 'DOG', 'TREE', 'HOME', 'HELLO', 'WORLD', 'TEST', 'QUIZ', 'AX', 'JO', 'QI'
     ];
     return new Set(words.map(w => w.toUpperCase()));

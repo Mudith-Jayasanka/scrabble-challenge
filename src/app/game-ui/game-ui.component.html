@@ -1,11 +1,13 @@
 <!-- Main Game Container -->
-<div class="bg-gray-800 text-white min-h-screen font-sans flex flex-col items-center justify-center p-4">
+<div class="playground min-h-screen font-sans flex flex-col items-center justify-center p-4">
+
+  <div class="fit-viewport"><div class="fit-inner" [style.width.px]="BASE_W" [style.height.px]="BASE_H" [style.transform]="'scale(' + scale() + ')'" style="transform-origin: top center;">
 
   <div class="w-full max-w-7xl flex flex-col lg:flex-row gap-6">
 
     <!-- Left Panel: Player Info & Scores -->
     <div class="lg:w-1/4 w-full flex flex-col gap-4 order-2 lg:order-1">
-      <div class="bg-gray-700 p-4 rounded-lg shadow-lg">
+      <div class="card-light p-4 rounded-lg shadow-lg">
         <h2 class="text-2xl font-bold mb-3 border-b border-gray-500 pb-2">Game Info</h2>
         <div class="space-y-2 text-lg">
           <div class="flex justify-between">
@@ -19,8 +21,8 @@
         </div>
       </div>
 
-      <div class="bg-gray-700 p-4 rounded-lg shadow-lg">
-        <h2 class="text-2xl font-bold mb-3 border-b border-gray-500 pb-2">Scores</h2>
+      <div class="card-light p-4 rounded-lg shadow-lg">
+        <h2 class="text-2xl font-bold mb-3 border-b border-gray-500 pb-2">Username</h2>
         <div class="space-y-3">
           @for(player of gameState().players; track player.id) {
             <div
@@ -49,7 +51,7 @@
             {{ warningMessage() }}
         </div>
 
-        <div class="aspect-square w-full max-w-2xl grid grid-cols-15 gap-0.5 p-2 bg-gray-900 rounded-md shadow-2xl">
+        <div class="aspect-square w-full max-w-2xl grid grid-cols-15 gap-0.5 p-2 board-frame rounded-md shadow-2xl">
             @for(row of displayBoard(); track $index) {
                 @for(square of row; track $index) {
                     <div
@@ -79,7 +81,7 @@
 
     <!-- Right Panel: Actions & Player Rack -->
     <div class="lg:w-1/4 w-full flex flex-col gap-4 order-3 lg:order-3">
-      <div class="bg-gray-700 p-4 rounded-lg shadow-lg">
+      <div class="card-light p-4 rounded-lg shadow-lg">
         <h2 class="text-2xl font-bold mb-3 border-b border-gray-500 pb-2">Actions</h2>
         <div class="grid grid-cols-2 gap-3">
           <button (click)="submitMove()" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg shadow-md transition-transform transform hover:scale-105">
@@ -97,13 +99,14 @@
         </div>
       </div>
 
-      <div class="bg-gray-900 p-4 rounded-lg shadow-lg">
+      <div class="card-light p-4 rounded-lg shadow-lg">
          <h3 class="text-xl font-bold mb-4 text-center">Your Rack</h3>
-         <div class="flex justify-center items-center gap-1 bg-gray-700 p-2 rounded-lg min-h-[70px]">
+         <div class="flex justify-center items-center gap-1 rack-bg p-2 rounded-lg min-h-[70px]">
             @for(tile of localPlayerRack(); track $index) {
                 <div
-                    class="w-12 h-16 bg-amber-200 text-gray-900 rounded-md shadow-lg flex flex-col items-center justify-center font-bold text-2xl relative cursor-grab active:cursor-grabbing"
+                    class="w-12 h-16 bg-amber-200 text-gray-900 rounded-md shadow-lg flex flex-col items-center justify-center font-bold text-2xl relative cursor-grab active:cursor-grabbing touch-manipulation"
                     draggable="true"
+                    (click)="onRackTileTap($index)"
                     (dragstart)="onDragStart($event, $index)"
                     (dragover)="onDragOver($event)"
                     (drop)="onDrop($event, $index)">
@@ -116,6 +119,8 @@
     </div>
   </div>
 
+  </div>
+  </div>
   <!-- Pass Turn Modal -->
    @if (showPassConfirm()) {
     <div class="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
